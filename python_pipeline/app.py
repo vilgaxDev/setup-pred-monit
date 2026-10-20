@@ -381,52 +381,103 @@ except Exception as e:
 try:
     st.sidebar.header("Data Source & Filters")
 
-    # Auto-load data on startup if not already loaded
-    if 'current_df' not in st.session_state or st.session_state.current_df is None:
-        st.sidebar.info("🔄 Auto-loading integrated data sources...")
+    # Auto-load ALL data on startup if not already loaded
+    if 'all_data_sources' not in st.session_state:
+        st.sidebar.info("🔄 Auto-loading ALL integrated data sources...")
+        
+        # Initialize data sources dictionary
+        st.session_state.all_data_sources = {}
         
         # Check available files
         data_files = {
-            "Maternity Register": MATERNITY_FILE,
-            "ANC Register 1": ANC_FILE_1,
-            "ANC Register 2": ANC_FILE_2,
-            "Under-5 Register": UNDER5_FILE
+            "maternity": ("Maternity Register", MATERNITY_FILE),
+            "anc1": ("ANC Register 1", ANC_FILE_1),
+            "anc2": ("ANC Register 2", ANC_FILE_2),
+            "under5": ("Under-5 Register", UNDER5_FILE)
         }
         
-        # Try to load from available files
-        loaded = False
-        for name, filepath in data_files.items():
+        # Load ALL available files
+        total_loaded = 0
+        for key, (name, filepath) in data_files.items():
             if filepath.exists():
                 try:
                     df_loaded = pd.read_excel(filepath, engine='openpyxl')
-                    st.session_state.current_df = df_loaded
-                    st.session_state.data_source = f"integrated ({name})"
-                    st.sidebar.success(f"✅ Auto-loaded {len(df_loaded):,} records from {name}")
-                    loaded = True
-                    break
+                    st.session_state.all_data_sources[key] = {
+                        'name': name,
+                        'data': df_loaded,
+                        'records': len(df_loaded)
+                    }
+                    st.sidebar.success(f"✅ Loaded {len(df_loaded):,} records from {name}")
+                    total_loaded += 1
                 except Exception as e:
                     st.sidebar.warning(f"⚠️ Could not load {name}: {e}")
         
-        # If no register files, try anonymized data
-        if not loaded:
-            sample_file = LOCAL_DATA_DIR / "anonymized_data_kg_export.xlsx"
-            if sample_file.exists():
-                try:
-                    df_sample = pd.read_excel(sample_file, engine='openpyxl')
-                    st.session_state.current_df = df_sample
-                    st.session_state.data_source = "integrated (anonymized)"
-                    st.sidebar.success(f"✅ Auto-loaded {len(df_sample):,} anonymized records")
-                    loaded = True
-                except Exception as e:
-                    st.sidebar.warning(f"⚠️ Could not load anonymized data: {e}")
+        # Also load anonymized data if available
+        sample_file = LOCAL_DATA_DIR / "anonymized_data_kg_export.xlsx"
+        if sample_file.exists():
+            try:
+                df_sample = pd.read_excel(sample_file, engine='openpyxl')
+                st.session_state.all_data_sources['anonymized'] = {
+                    'name': 'Anonymized Data',
+                    'data': df_sample,
+                    'records': len(df_sample)
+                }
+                st.sidebar.success(f"✅ Loaded {len(df_sample):,} anonymized records")
+                total_loaded += 1
+            except Exception as e:
+                st.sidebar.warning(f"⚠️ Could not load anonymized data: {e}")
         
-        if not loaded:
+        if total_loaded > 0:
+            st.sidebar.success(f"✅ Successfully loaded {total_loaded} data sources")
+            # Set default to maternity if available, otherwise first available
+            if 'maternity' in st.session_state.all_data_sources:
+                st.session_state.current_df = st.session_state.all_data_sources['maternity']['data']
+                st.session_state.data_source = "integrated (Maternity Register)"
+            elif st.session_state.all_data_sources:
+                first_key = list(st.session_state.all_data_sources.keys())[0]
+                st.session_state.current_df = st.session_state.all_data_sources[first_key]['data']
+                st.session_state.data_source = f"integrated ({st.session_state.all_data_sources[first_key]['name']})"
+        else:
             st.sidebar.warning("⚠️ No integrated data found. Please upload a dataset.")
+    
+    # Refresh current_df if not set
+    if 'current_df' not in st.session_state or st.session_state.current_df is None:
+        if 'all_data_sources' in st.session_state and st.session_state.all_data_sources:
+            if 'maternity' in st.session_state.all_data_sources:
+                st.session_state.current_df = st.session_state.all_data_sources['maternity']['data']
+                st.session_state.data_source = "integrated (Maternity Register)"
+            else:
+                first_key = list(st.session_state.all_data_sources.keys())[0]
+                st.session_state.current_df = st.session_state.all_data_sources[first_key]['data']
+                st.session_state.data_source = f"integrated ({st.session_state.all_data_sources[first_key]['name']})"
 
     data_source = st.sidebar.radio(
         "Data Input Mode",
         ["Upload Custom Dataset", "Use Integrated Data Sources"]
     )
+    
+    # If using integrated sources, show loaded data options
+    if data_source == "Use Integrated Data Sources" and 'all_data_sources' in st.session_state and st.session_state.all_data_sources:
+        st.sidebar.subheader("📊 Available Data Sources")
+        
+        # Create options for data source selection
+        data_options = []
+        for key, info in st.session_state.all_data_sources.items():
+            data_options.append(f"{info['name']} ({info['records']:,} records)")
+        
+        selected_source = st.sidebar.selectbox(
+            "Select Active Dataset",
+            data_options,
+            help="Choose which dataset to use for analysis"
+        )
+        
+        # Update current_df based on selection
+        selected_index = data_options.index(selected_source)
+        selected_key = list(st.session_state.all_data_sources.keys())[selected_index]
+        st.session_state.current_df = st.session_state.all_data_sources[selected_key]['data']
+        st.session_state.data_source = f"integrated ({st.session_state.all_data_sources[selected_key]['name']})"
+        
+        st.sidebar.info(f"Currently using: {st.session_state.all_data_sources[selected_key]['name']}")
 
     uploaded_file = None
     df_custom = None
@@ -470,16 +521,44 @@ except Exception as e:
         else:
             st.sidebar.warning(f"⚠️ {name} (not found)")
     
-    # Load sample data from dashboard directory
+    # Load ALL available files as fallback
+    st.session_state.all_data_sources = {}
+    for key, (name, filepath) in data_files.items():
+        if filepath.exists():
+            try:
+                df_loaded = pd.read_excel(filepath, engine='openpyxl')
+                st.session_state.all_data_sources[key] = {
+                    'name': name,
+                    'data': df_loaded,
+                    'records': len(df_loaded)
+                }
+                st.sidebar.success(f"✅ Loaded {len(df_loaded):,} records from {name}")
+            except Exception as e:
+                st.sidebar.warning(f"⚠️ Could not load {name}: {e}")
+    
+    # Also load anonymized data if available
     sample_file = LOCAL_DATA_DIR / "anonymized_data_kg_export.xlsx"
     if sample_file.exists():
         try:
             df_sample = pd.read_excel(sample_file, engine='openpyxl')
-            st.session_state.current_df = df_sample
-            st.session_state.data_source = "integrated"
-            st.sidebar.success(f"✅ Loaded {len(df_sample):,} integrated records")
+            st.session_state.all_data_sources['anonymized'] = {
+                'name': 'Anonymized Data',
+                'data': df_sample,
+                'records': len(df_sample)
+            }
+            st.sidebar.success(f"✅ Loaded {len(df_sample):,} anonymized records")
         except Exception as e:
-            st.sidebar.error(f"❌ Error loading integrated data: {e}")
+            st.sidebar.warning(f"⚠️ Could not load anonymized data: {e}")
+    
+    # Set default current_df
+    if st.session_state.all_data_sources:
+        if 'maternity' in st.session_state.all_data_sources:
+            st.session_state.current_df = st.session_state.all_data_sources['maternity']['data']
+            st.session_state.data_source = "integrated (Maternity Register)"
+        else:
+            first_key = list(st.session_state.all_data_sources.keys())[0]
+            st.session_state.current_df = st.session_state.all_data_sources[first_key]['data']
+            st.session_state.data_source = f"integrated ({st.session_state.all_data_sources[first_key]['name']})"
     else:
         st.sidebar.warning("Integrated data not found. Please upload a dataset.")
 
@@ -515,6 +594,24 @@ try:
             st.write(f"**Data Source:** {st.session_state.get('data_source', 'unknown')}")
             st.write(f"**Unique Patients:** Unknown (no patient identifier available)")
             st.write(f"**Duplicate Detection:** Not performed (no patient identifier)")
+        
+        # Show all loaded data sources
+        if 'all_data_sources' in st.session_state and st.session_state.all_data_sources:
+            st.markdown("---")
+            st.subheader("📊 All Loaded Data Sources")
+            
+            for key, info in st.session_state.all_data_sources.items():
+                with st.expander(f"📋 {info['name']}", expanded=False):
+                    st.write(f"**Records:** {info['records']:,}")
+                    st.write(f"**Columns:** {len(info['data'].columns)}")
+                    st.write(f"**Status:** Loaded and available")
+                    
+                    # Show sample of columns
+                    st.write("**Sample Columns:**")
+                    col_list = list(info['data'].columns[:10])
+                    st.write(", ".join(col_list))
+                    if len(info['data'].columns) > 10:
+                        st.write(f"... and {len(info['data'].columns) - 10} more columns")
         else:
             st.warning("No data loaded")
         
@@ -568,6 +665,49 @@ try:
 
         st.info("Clinical Governance Notice: AI predictive scores are clinical decision-support signals to assist healthcare providers and county directors. They do not replace autonomous clinical diagnosis.")
 
+        st.markdown("---")
+        
+        # Key Analytics Capabilities
+        st.subheader("🎯 Key Analytics Capabilities")
+        st.info("Advanced maternal and neonatal health analytics powered by AI")
+        
+        col_cap1, col_cap2, col_cap3 = st.columns(3)
+        
+        with col_cap1:
+            st.markdown("""
+            #### 📈 Maternal & Neonatal Mortality Rates
+            - **Maternal Mortality Ratio (MMR)** tracking
+            - **Neonatal Mortality Rate (NMR)** monitoring
+            - **Stillbirth rate** analysis
+            - **Perinatal mortality** assessment
+            - **Geographic variation** mapping
+            - **Temporal trend** visualization
+            """)
+        
+        with col_cap2:
+            st.markdown("""
+            #### 📊 Time-Series Trend Analysis
+            - **Monthly pregnancy patterns** tracking
+            - **Risk distribution trends** over time
+            - **Health outcome trajectories** monitoring
+            - **Intervention impact assessment**
+            - **Seasonal variation** detection
+            - **Longitudinal trend** visualization
+            - **Quarterly/Yearly aggregation**
+            """)
+        
+        with col_cap3:
+            st.markdown("""
+            #### 🔍 Mortality Root-Cause Analysis
+            - **Major mortality drivers** identification
+            - **PPH (Postpartum Hemorrhage)** tracking
+            - **Hypertensive disorders** monitoring
+            - **Infection/sepsis** detection
+            - **Anemia-related deaths** analysis
+            - **Targeted interventions** prescription
+            - **Evidence-based solutions** for reduction
+            """)
+        
         st.markdown("---")
         st.subheader("🔒 BERT-LLM-KG Anonymization Status")
         
